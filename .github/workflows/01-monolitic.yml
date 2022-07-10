@@ -1,0 +1,69 @@
+name: Monolithic
+on:
+  push:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      trigger:
+        description: Type m to triggre manual jobs
+        required: false
+        default: ''
+env:
+  JAVA_VERSION: '18'
+  NODE_VERSION: '18'
+jobs:
+  monolithic:
+    if: github.event.inputs.trigger == ''
+      || !startsWith(github.event.inputs.trigger, 'm')
+      || !startsWith(github.event.inputs.trigger, 'M')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/cache@v3
+        id: java-cache
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/com/gituhb/daggerok
+          key: ${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: sudo apt install httpie jq curl -yqq
+      - run: |
+          docker run -d --rm --name axon-server --platform=linux/x86_64 \
+            --health-cmd='wget -q http://127.0.0.1:8024/actuator/health || exit 1' \
+            --health-start-period=1s --health-retries=1111 --health-interval=1s --health-timeout=5s \
+            -p 8024:8024 -p 8124:8124 \
+            axoniq/axonserver:4.5.12
+      - run: npm_config_yes=true npx wait-port 8124
+      - run: while ! [[ `curl -s -o /dev/null -w "%{http_code}" 0:8024/actuator/health` -eq 200 ]] ; do sleep 3s ; echo -n '.' ; done
+      - run: |
+          docker run -d --rm --name mysql --platform=linux/x86_64 \
+            --health-cmd='mysqladmin ping -h 127.0.0.1 -u $MYSQL_USER --password=$MYSQL_PASSWORD || exit 1' \
+            --health-start-period=1s --health-retries=1111 --health-interval=1s --health-timeout=5s \
+            -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=database \
+            -e MYSQL_USER=user -e MYSQL_PASSWORD=password \
+            -p 3306:3306 \
+            mysql:8.0.24
+      - run: while [[ $(docker ps -n 1 -q -f health=healthy -f status=running | wc -l) -lt 1 ]] ; do sleep 3 ; echo -n '.' ; done ; sleep 15; echo 'MySQL is ready.'
+      - run: sudo rm -rf ~/.m2/repository/io/github/daggerok ; cd $GITHUB_WORKSPACE ; ./mvnw -f 01-monolithic clean install
+      - run: |
+          cd $GITHUB_WORKSPACE ; ./mvnw -f 01-monolithic spring-boot:start
+          npm_config_yes=true npx wait-port 8080
+          http --ignore-stdin post :8080/issue  id=00000000-0000-0000-0000-000000000001 amount=3.33
+          http --ignore-stdin post :8080        id=00000000-0000-0000-0000-000000000001
+          http --ignore-stdin post :8080/redeem id=00000000-0000-0000-0000-000000000001 amount=5
+      - run: http --ignore-stdin post :8080/redeem id=00000000-0000-0000-0000-000000000001 amount=1.11
+      - run: http --ignore-stdin post :8080        id=00000000-0000-0000-0000-000000000001
+      - run: http --ignore-stdin post :8080/redeem id=00000000-0000-0000-0000-000000000001 amount=1.11
+      - run: http --ignore-stdin post :8080        id=00000000-0000-0000-0000-000000000001
+      - run: http --ignore-stdin post :8080/redeem id=00000000-0000-0000-0000-000000000001 amount=1.11
+      - run: http --ignore-stdin post :8080        id=00000000-0000-0000-0000-000000000001
+      - run: cd $GITHUB_WORKSPACE ; ./mvnw -f 01-monolithic spring-boot:stop
+      - run: docker stop mysql axon-server

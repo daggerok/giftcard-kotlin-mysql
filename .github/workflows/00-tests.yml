@@ -1,0 +1,49 @@
+name: Tests
+on:
+  push:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      trigger:
+        description: Type m to triggre manual jobs
+        required: false
+        default: ''
+env:
+  JAVA_VERSION: '18'
+jobs:
+  tests:
+    if: github.event.inputs.trigger == ''
+      || !startsWith(github.event.inputs.trigger, 'm')
+      || !startsWith(github.event.inputs.trigger, 'M')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/cache@v3
+        id: java-cache
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/com/gituhb/daggerok
+          key: ${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      - run: sudo apt install curl -yqq
+      - run: |
+          docker run -d --rm --name axon-server --platform=linux/x86_64 \
+            -p 8024:8024 -p 8124:8124 \
+            axoniq/axonserver:4.5.12
+      - run: while ! [[ `curl -s -o /dev/null -w "%{http_code}" 0:8024/actuator/health` -eq 200 ]] ; do sleep 3s ; echo -n '.' ; done
+      - run: |
+          docker run -d --rm --name mysql --platform=linux/x86_64 \
+            --health-cmd='mysqladmin ping -h 127.0.0.1 -u $MYSQL_USER --password=$MYSQL_PASSWORD || exit 1' \
+            --health-start-period=1s --health-retries=1111 --health-interval=1s --health-timeout=5s \
+            -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=database \
+            -e MYSQL_USER=user -e MYSQL_PASSWORD=password \
+            -p 3306:3306 \
+            mysql:8.0.24
+      - run: while [[ $(docker ps -n 1 -q -f health=healthy -f status=running | wc -l) -lt 1 ]] ; do sleep 3 ; echo -n '.' ; done ; sleep 15; echo 'MySQL is ready.'
+      - run: cd $GITHUB_WORKSPACE ; ./mvnw clean ; ./mvnw
+      - run: docker stop mysql axon-server

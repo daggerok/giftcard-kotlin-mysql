@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: giftcard
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/database
+    username: user
+    password: password
+  jpa:
+    generate-ddl: on
+    hibernate:
+      ddl-auto: create-drop
+  output:
+    ansi:
+      enabled: always
+logging:
+  level:
+    io.github.daggerok.axon: debug
+    org.hibernate.SQL: debug
+axon:
+  server:
+    servers: 127.0.0.1:8124
+server:
+  port: 8080
